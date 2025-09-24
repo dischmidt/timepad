@@ -17,6 +17,7 @@ Commands:
   cp   <pattern>     – copy an entry to a new filename
   bak  <pattern>     – create a .bak copy next to the file
   ls                 - list filenames
+  config             - show parameters effecting program execution
 
 Directory resolution priority:
   --dir option > $TIMEPAD > $LOG_DIR > current working directory
