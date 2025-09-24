@@ -43,6 +43,8 @@ from rich.prompt import Prompt, Confirm
 from rich.panel import Panel
 from rich import box
 
+import json
+
 console = Console()
 
 FILENAME_DT_LEN = 19  # len("YYYY-MM-DD HH-MM-SS")
@@ -60,6 +62,51 @@ class Entry:
     @property
     def filename(self) -> str:
         return os.path.basename(self.path)
+    
+def _editor_info() -> dict:
+    env_editor = (os.environ.get("EDITOR") or "").strip() or None
+    env_visual = (os.environ.get("VISUAL") or "").strip() or None
+    effective = (env_editor or env_visual or DEFAULT_EDITOR).strip()
+    # Check availability: take first token as program name
+    program = shlex.split(effective)[0] if effective else effective
+    on_path = shutil.which(program) is not None if program else False
+    source = "EDITOR" if env_editor else ("VISUAL" if env_visual else "DEFAULT")
+    return {
+        "EDITOR_raw": env_editor,
+        "VISUAL_raw": env_visual,
+        "effective_editor": effective,
+        "editor_source": source,
+        "editor_on_path": on_path,
+    }
+
+def _base_dir_info(obj: dict) -> dict:
+    flags = obj.get("flags", {})
+    dir_opt = flags.get("dir_opt")
+    use_cwd = bool(flags.get("cwd"))
+    if dir_opt:
+        source = "--dir"
+        chosen = dir_opt
+    elif use_cwd:
+        source = "CWD"
+        chosen = os.getcwd()
+    elif os.environ.get("TIMEPAD"):
+        source = "TIMEPAD"
+        chosen = os.environ.get("TIMEPAD")
+    elif os.environ.get("LOG_DIR"):
+        source = "LOG_DIR"
+        chosen = os.environ.get("LOG_DIR")
+    else:
+        source = "CWD"
+        chosen = os.getcwd()
+
+    effective = os.path.abspath(os.path.expanduser(os.path.expandvars(chosen)))
+    return {
+        "effective_base_dir": effective,
+        "base_dir_source": source,
+        "base_dir_exists": os.path.isdir(effective),
+        "CWD": os.getcwd(),
+    }
+
 
 
 def resolve_base_dir(dir_opt: Optional[str], ignore_env: bool = False) -> str:
@@ -163,6 +210,7 @@ def resolve_by_query(base_dir: str, query: str) -> Optional[Entry]:
 def cli(ctx: click.Context, dir_opt: Optional[str], cwd: bool):
     """Timepad CLI. Without a subcommand, an interactive shell is started."""
     ctx.ensure_object(dict)
+    ctx.obj["flags"] = {"dir_opt": dir_opt, "cwd": bool(cwd)}
     ctx.obj["base_dir"] = resolve_base_dir(dir_opt, ignore_env=cwd)
     if ctx.invoked_subcommand is None:
         start_shell(ctx.obj)
@@ -236,6 +284,13 @@ def start_shell(obj: dict):
     @click.pass_context
     def ls(ctx):
         _cmd_ls(obj)
+
+    @sh.command(help="Show configuration and environment affecting timepad")
+    @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+    @click.pass_context
+    def config(ctx, as_json: bool):
+        _cmd_config(obj, as_json)   # or _cmd_config(ctx.obj, as_json) if you didn't apply the earlier fix
+
 
     sh()
 
@@ -314,6 +369,13 @@ def bak(ctx, query: str):
 def ls(ctx):
     _cmd_ls(ctx.obj)
 
+@cli.command(help="Show configuration and environment affecting timepad")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def config(ctx, as_json: bool):
+    _cmd_config(ctx.obj, as_json)
+
+
 # ----------------- Implementations -----------------
 
 def _ensure_dir(path: str):
@@ -325,6 +387,62 @@ def _make_filename(ts: datetime, subject: str | None) -> str:
     if subject:
         return f"{base} {subject}.txt"
     return f"{base}.txt"
+
+def _cmd_config(obj: dict, as_json: bool = False):
+    flags = obj.get("flags", {"dir_opt": None, "cwd": False})
+    editor = _editor_info()
+    base = _base_dir_info(obj)
+
+    data = {
+        # Requested to show these first:
+        "EDITOR_raw": editor["EDITOR_raw"],
+        "TIMEPAD_raw": os.environ.get("TIMEPAD"),
+        "LOG_DIR_raw": os.environ.get("LOG_DIR"),
+        "CWD": base["CWD"],
+        "invoked_flags": {"--dir": flags.get("dir_opt"), "-c/--cwd": bool(flags.get("cwd"))},
+
+        # Additional helpful fields:
+        "effective_base_dir": base["effective_base_dir"],
+        "base_dir_source": base["base_dir_source"],
+        "base_dir_exists": base["base_dir_exists"],
+        "VISUAL_raw": editor["VISUAL_raw"],
+        "effective_editor": editor["effective_editor"],
+        "editor_source": editor["editor_source"],
+        "editor_on_path": editor["editor_on_path"],
+    }
+
+    if as_json:
+        sys.stdout.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+        return
+
+    table = Table(title="timepad configuration", box=box.MINIMAL_DOUBLE_HEAD)
+    table.add_column("Key", style="cyan", no_wrap=True)
+    table.add_column("Value", style="magenta")
+
+    def show(key, val):
+        if val in (None, ""):
+            console.print(f"[dim]{key}: (unset)[/dim]")
+        else:
+            table.add_row(key, str(val))
+
+    # First block (as requested)
+    show("EDITOR_raw", data["EDITOR_raw"])
+    show("TIMEPAD_raw", data["TIMEPAD_raw"])
+    show("LOG_DIR_raw", data["LOG_DIR_raw"])
+    show("CWD", data["CWD"])
+    table.add_row("invoked_flags.--dir", str(data["invoked_flags"]["--dir"]))
+    table.add_row("invoked_flags.-c/--cwd", str(data["invoked_flags"]["-c/--cwd"]))
+
+    # Extra helpful fields
+    table.add_row("effective_base_dir", data["effective_base_dir"])
+    table.add_row("base_dir_source", data["base_dir_source"])
+    table.add_row("base_dir_exists", str(data["base_dir_exists"]))
+    show("VISUAL_raw", data["VISUAL_raw"])
+    table.add_row("effective_editor", data["effective_editor"])
+    table.add_row("editor_source", data["editor_source"])
+    table.add_row("editor_on_path", "yes" if data["editor_on_path"] else "no")
+
+    console.print(table)
 
 
 def _cmd_new(obj: dict, when: Optional[str] = None, subject: Optional[str] = None):
