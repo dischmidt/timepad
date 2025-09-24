@@ -4,3 +4,4 @@ pyvenv.cfg
 include/*
 lib/*
 timepad/__pycache__/*
+.??_Store
