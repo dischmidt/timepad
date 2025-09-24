@@ -292,6 +292,13 @@ def start_shell(obj: dict):
     def config(ctx, as_json: bool):
         _cmd_config(obj, as_json)   # or _cmd_config(ctx.obj, as_json) if you didn't apply the earlier fix
 
+    @sh.command(help="Rename only the subject (keep date/time and .txt)")
+    @click.argument("query", nargs=1)
+    @click.pass_context
+    def rename(ctx, query):
+        _cmd_rename(obj, query)   # or: _cmd_rename(obj, query) if using captured obj
+
+
 
     sh()
 
@@ -375,6 +382,13 @@ def ls(ctx):
 @click.pass_context
 def config(ctx, as_json: bool):
     _cmd_config(ctx.obj, as_json)
+
+@cli.command(help="Rename only the subject (keep date/time and .txt)")
+@click.argument("query", nargs=1)
+@click.pass_context
+def rename(ctx, query: str):
+    _cmd_rename(ctx.obj, query)
+
 
 
 # ----------------- Implementations -----------------
@@ -620,6 +634,39 @@ def _cmd_ls(obj: dict):
     entries = sort_entries(scan_entries(base_dir), ascending=True)
     for e in entries:
         click.echo(e.filename)
+
+def _cmd_rename(obj: dict, query: str):
+    """
+    Rename only the subject part of the filename.
+    Keeps date/time prefix and .txt extension unchanged.
+    """
+    base_dir = obj["base_dir"]
+    e = resolve_by_query(base_dir, query)
+    if not e:
+        return
+
+    # Ask for new subject (default to current subject; allow empty to remove subject)
+    new_subject = Prompt.ask("New subject", default=e.subject).strip()
+
+    base = e.dt.strftime(FILENAME_DT_FORMAT)  # unchanged date/time
+    new_filename = f"{base}.txt" if not new_subject else f"{base} {new_subject}.txt"
+    new_path = os.path.join(base_dir, new_filename)
+
+    if new_filename == e.filename:
+        console.print("[yellow]No changes.[/yellow]")
+        return
+
+    if os.path.exists(new_path):
+        if not Confirm.ask("Target exists. Overwrite?", default=False):
+            console.print("[yellow]Rename cancelled.[/yellow]")
+            return
+
+    try:
+        os.replace(e.path, new_path)
+        console.print(f"[green]Renamed to:[/green] {os.path.basename(new_path)}")
+    except OSError as ex:
+        console.print(f"[red]Error while renaming:[/red] {ex}")
+
 
 if __name__ == "__main__":
     try:
