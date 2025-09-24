@@ -45,6 +45,7 @@ from rich.panel import Panel
 from rich import box
 
 import json
+import re
 
 console = Console()
 
@@ -63,6 +64,26 @@ class Entry:
     @property
     def filename(self) -> str:
         return os.path.basename(self.path)
+    
+
+def _join_query(parts: tuple[str, ...]) -> str:
+    return " ".join(parts).strip()
+
+def _normalize_query_time_to_hyphens(q: str) -> str:
+    # YYYY-MM-DD HH:MM[:SS]  ->  YYYY-MM-DD HH-MM[-SS]
+    q = re.sub(
+        r'(\b\d{4}-\d{2}-\d{2}\b)\s+(\d{2}:\d{2}(?::\d{2})?)',
+        lambda m: f"{m.group(1)} " + m.group(2).replace(":", "-"),
+        q,
+    )
+    # Zeit am Anfang (ohne Datum) erlauben
+    q = re.sub(
+        r'^\s*(\d{2}:\d{2}(?::\d{2})?)',
+        lambda m: m.group(1).replace(":", "-"),
+        q,
+    )
+    return q
+
     
 def _editor_info() -> dict:
     env_editor = (os.environ.get("EDITOR") or "").strip() or None
@@ -124,6 +145,28 @@ def resolve_base_dir(dir_opt: Optional[str], ignore_env: bool = False) -> str:
         )
     return os.path.abspath(os.path.expanduser(os.path.expandvars(chosen)))
 
+def _normalize_query_time_to_hyphens(q: str) -> str:
+    """
+    Erlaubt Eingaben wie 'YYYY-MM-DD HH:MM[:SS]' oder nur 'HH:MM[:SS]'.
+    Wandelt NUR die Uhrzeit-Doppelpunkte in Bindestriche um,
+    und zwar (a) wenn sie direkt auf ein Datum folgt oder (b) am Zeilenanfang.
+    Doppelpunkte im Betreff bleiben unverändert.
+    """
+    # (a) Datum + Zeit überall im String
+    q = re.sub(
+        r'(\b\d{4}-\d{2}-\d{2}\b)\s+(\d{2}:\d{2}(?::\d{2})?)',
+        lambda m: f"{m.group(1)} " + m.group(2).replace(":", "-"),
+        q
+    )
+    # (b) Zeit am Anfang der Eingabe
+    q = re.sub(
+        r'^\s*(\d{2}:\d{2}(?::\d{2})?)',
+        lambda m: m.group(1).replace(":", "-"),
+        q
+    )
+    return q
+
+
 
 def parse_entry(path: str) -> Optional[Entry]:
     name = os.path.basename(path)
@@ -170,35 +213,53 @@ def open_in_editor(path: str) -> int:
         console.print(f"[red]Editor '{editor}' not found.[/red]")
         return 1
 
-
 def pick_from_matches(matches: List[Entry]) -> Optional[Entry]:
     if not matches:
         console.print("[yellow]No matches found.[/yellow]")
         return None
     if len(matches) == 1:
         return matches[0]
+
     table = Table(title="Multiple matches – select one", box=box.SIMPLE)
     table.add_column("#", justify="right", style="cyan", no_wrap=True)
     table.add_column("Date/Time", style="green")
     table.add_column("Subject", style="magenta")
+
     sorted_matches = sort_entries(matches)
     for i, e in enumerate(sorted_matches, start=1):
         table.add_row(str(i), e.dt.strftime(DISPLAY_DT_FORMAT), e.subject)
     console.print(table)
+
+    # Allow cancel: q / 0 (also accept quit/cancel/c/x)
     while True:
-        choice = Prompt.ask("Number", default="1")
+        choice = Prompt.ask("Number [1..{n}] (q/0 = cancel)".format(n=len(sorted_matches)), default="q").strip()
+        low = choice.lower()
+
+        if low in {"q", "quit", "cancel", "c", "x"} or choice == "0":
+            console.print("[yellow]Selection cancelled.[/yellow]")
+            return None
+
         if not choice.isdigit():
             console.print("[red]Please enter a number.[/red]")
             continue
+
         idx = int(choice)
         if 1 <= idx <= len(sorted_matches):
             return sorted_matches[idx - 1]
+
         console.print("[red]Invalid choice.[/red]")
 
 
 def resolve_by_query(base_dir: str, query: str) -> Optional[Entry]:
-    query_lower = query.lower()
-    matches = [e for e in scan_entries(base_dir) if query_lower in e.filename.lower()]
+    # Eingabe so normalisieren, dass Zeitangaben mit ':' zu '-' werden
+    # (nur in echter Zeit-Position, siehe Helper)
+    normalized = _normalize_query_time_to_hyphens(query)
+    query_lower = normalized.lower()
+
+    matches = [
+        e for e in scan_entries(base_dir)
+        if query_lower in e.filename.lower()
+    ]
     return pick_from_matches(matches)
 
 
@@ -237,10 +298,10 @@ def start_shell(obj: dict):
         _cmd_list(obj, asc)
 
     @sh.command(help="Show file content (by part of filename)")
-    @click.argument("query", nargs=1)
+    @click.argument("query_parts", nargs=-1)
     @click.pass_context
-    def cat(ctx, query):
-        _cmd_cat(obj, query)
+    def cat(ctx, query_parts):
+        _cmd_cat(obj,_join_query(query_parts))
 
     @sh.command(help="Dump all entries in sequence")
     @click.option("-a", "ascending", is_flag=True, default=True, help="Ascending (default)")
@@ -252,34 +313,34 @@ def start_shell(obj: dict):
         _cmd_dump(obj, asc, with_separator)
 
     @sh.command(help="Edit a file in the editor (by part of filename)")
-    @click.argument("query", nargs=1)
+    @click.argument("query_parts", nargs=-1)
     @click.pass_context
-    def edit(ctx, query):
-        _cmd_edit(obj, query)
+    def edit(ctx, query_parts):
+        _cmd_edit(obj, _join_query(query_parts))
 
     @sh.command(help="Delete a file (by part of filename)")
-    @click.argument("query", nargs=1)
+    @click.argument("query_parts", nargs=-1)
     @click.pass_context
-    def rm(ctx, query):
-        _cmd_rm(obj, query)
+    def rm(ctx, query_parts):
+        _cmd_rm(obj, _join_query(query_parts))
 
     @sh.command(help="Rename an entry (by part of filename)")
-    @click.argument("query", nargs=1)
+    @click.argument("query_parts", nargs=-1)
     @click.pass_context
-    def mv(ctx, query):
-        _cmd_mv(obj, query)
+    def mv(ctx, query_parts):
+        _cmd_mv(obj, _join_query(query_parts))
 
     @sh.command(help="Copy an entry to a new filename (by part of filename)")
-    @click.argument("query", nargs=1)
+    @click.argument("query_parts", nargs=-1)
     @click.pass_context
-    def cp(ctx, query):
-        _cmd_cp(obj, query)
+    def cp(ctx, query_parts):
+        _cmd_cp(obj, _join_query(query_parts))
 
     @sh.command(help="Create a .bak backup next to the file")
-    @click.argument("query", nargs=1)
+    @click.argument("query_parts", nargs=-1)
     @click.pass_context
-    def bak(ctx, query):
-        _cmd_bak(obj, query)
+    def bak(ctx, query_parts):
+        _cmd_bak(obj, _join_query(query_parts))
 
     @sh.command(help="List filenames")
     @click.pass_context
@@ -293,10 +354,10 @@ def start_shell(obj: dict):
         _cmd_config(obj, as_json)   # or _cmd_config(ctx.obj, as_json) if you didn't apply the earlier fix
 
     @sh.command(help="Rename only the subject (keep date/time and .txt)")
-    @click.argument("query", nargs=1)
+    @click.argument("query_parts", nargs=-1)
     @click.pass_context
-    def rename(ctx, query):
-        _cmd_rename(obj, query)   # or: _cmd_rename(obj, query) if using captured obj
+    def rename(ctx, query_parts):
+        _cmd_rename(obj, _join_query(query_parts))   # or: _cmd_rename(obj, query) if using captured obj
 
 
 
@@ -321,7 +382,7 @@ def list_cmd(ctx, ascending: bool, descending: bool):
 
 
 @cli.command(help="Show file content")
-@click.argument("query", nargs=1)
+@click.argument("query", nargs=-1)
 @click.pass_context
 def cat(ctx, query: str):
     _cmd_cat(ctx.obj, query)
@@ -338,21 +399,21 @@ def dump(ctx, ascending: bool, descending: bool, with_separator: bool):
 
 
 @cli.command(help="Edit a file in the editor")
-@click.argument("query", nargs=1)
+@click.argument("query", nargs=-1)
 @click.pass_context
 def edit(ctx, query: str):
     _cmd_edit(ctx.obj, query)
 
 
 @cli.command(help="Delete a file")
-@click.argument("query", nargs=1)
+@click.argument("query", nargs=-1)
 @click.pass_context
 def rm(ctx, query: str):
     _cmd_rm(ctx, query)
 
 
 @cli.command(help="Rename an entry")
-@click.argument("query", nargs=1)
+@click.argument("query", nargs=-1)
 @click.pass_context
 def mv(ctx, query: str):
     _cmd_mv(ctx.obj, query)
@@ -366,7 +427,7 @@ def cp(ctx, query: str):
 
 
 @cli.command(help="Create a .bak backup of an entry")
-@click.argument("query", nargs=1)
+@click.argument("query", nargs=-1)
 @click.pass_context
 def bak(ctx, query: str):
     _cmd_bak(ctx.obj, query)
