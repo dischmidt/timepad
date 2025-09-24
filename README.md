@@ -6,6 +6,12 @@ and provides convenient commands to list, view, dump, edit, rename, copy, and ba
 
 ---
 
+## Purpose
+
+Timepad helps you record what happened, when it happened, and why. Each note begins with the current date and time, plus a short subject, so your work forms a clear timeline and context. You can start a note for a task, return to it later, and quickly find related notes for the same project or day. Reading, renaming, copying, or safely backing up entries is simple. Use it to document steps, capture ideas, track progress, and assemble a dependable story of your decisions and results.
+
+---
+
 ## Features
 
 - **Structured filenames**  
