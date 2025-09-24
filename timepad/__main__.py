@@ -196,10 +196,11 @@ def start_shell(obj: dict):
     @sh.command(help="Dump all entries in sequence")
     @click.option("-a", "ascending", is_flag=True, default=True, help="Ascending (default)")
     @click.option("-d", "descending", is_flag=True, help="Descending")
+    @click.option("-s", "with_separator", is_flag=True, help="Add a separator line between files")
     @click.pass_context
-    def dump(ctx, ascending: bool, descending: bool):
+    def dump(ctx, ascending: bool, descending: bool, with_separator: bool):
         asc = ascending if not descending else False
-        _cmd_dump(obj, asc)
+        _cmd_dump(obj, asc, with_separator)
 
     @sh.command(help="Edit a file in the editor (by part of filename)")
     @click.argument("query", nargs=1)
@@ -266,10 +267,11 @@ def cat(ctx, query: str):
 @cli.command(help="Dump all entries")
 @click.option("-a", "ascending", is_flag=True, default=True, help="Ascending (default)")
 @click.option("-d", "descending", is_flag=True, help="Descending")
+@click.option("-s", "with_separator", is_flag=True, help="Add a separator line between files")
 @click.pass_context
-def dump(ctx, ascending: bool, descending: bool):
+def dump(ctx, ascending: bool, descending: bool, with_separator: bool):
     asc = ascending if not descending else False
-    _cmd_dump(ctx.obj, asc)
+    _cmd_dump(ctx.obj, asc, with_separator)
 
 
 @cli.command(help="Edit a file in the editor")
@@ -376,17 +378,29 @@ def _cmd_cat(obj: dict, query: str):
         sys.stdout.write(f.read())
 
 
-def _cmd_dump(obj: dict, ascending: bool):
+def _cmd_dump(obj: dict, ascending: bool, with_separator: bool = False):
     base_dir = obj["base_dir"]
     entries = sort_entries(scan_entries(base_dir), ascending=ascending)
-    first = True
-    for e in entries:
+
+    sep_line = "-" * 80
+    prev_ended_nl = True  # assume clean start
+
+    for i, e in enumerate(entries):
+        # Write a separator or minimal spacing between files
+        if i > 0:
+            if with_separator:
+                if not prev_ended_nl:
+                    sys.stdout.write("\n")
+                sys.stdout.write(f"{sep_line}\n")
+            else:
+                # preserve previous behavior: ensure at most one newline between files
+                if not prev_ended_nl:
+                    sys.stdout.write("\n")
+
         with open(e.path, "r", encoding="utf-8") as f:
             content = f.read()
-            if not first and not content.endswith("\n"):
-                sys.stdout.write("\n")
             sys.stdout.write(content)
-            first = False
+            prev_ended_nl = content.endswith("\n")
 
 
 def _cmd_edit(obj: dict, query: str):
