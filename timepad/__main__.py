@@ -16,6 +16,7 @@ Commands:
   mv   <pattern>     – rename an entry after selecting it uniquely
   cp   <pattern>     – copy an entry to a new filename
   bak  <pattern>     – create a .bak copy next to the file
+  ls                 - list filenames
 
 Directory resolution priority:
   --dir option > $TIMEPAD > $LOG_DIR > current working directory
@@ -61,14 +62,18 @@ class Entry:
         return os.path.basename(self.path)
 
 
-def resolve_base_dir(dir_opt: Optional[str]) -> str:
-    # Priority: --dir > $TIMEPAD > $LOG_DIR > CWD
-    chosen = (
-        dir_opt
-        or os.environ.get("TIMEPAD")
-        or os.environ.get("LOG_DIR")
-        or os.getcwd()
-    )
+def resolve_base_dir(dir_opt: Optional[str], ignore_env: bool = False) -> str:
+    # Precedence: --dir > -c > $TIMEPAD > $LOG_DIR > CWD
+    if dir_opt:
+        chosen = dir_opt
+    elif ignore_env:
+        chosen = os.getcwd()
+    else:
+        chosen = (
+            os.environ.get("TIMEPAD")
+            or os.environ.get("LOG_DIR")
+            or os.getcwd()
+        )
     return os.path.abspath(os.path.expanduser(os.path.expandvars(chosen)))
 
 
@@ -150,12 +155,15 @@ def resolve_by_query(base_dir: str, query: str) -> Optional[Entry]:
 
 
 @click.group(invoke_without_command=True)
-@click.option("--dir", "dir_opt", type=click.Path(file_okay=False, dir_okay=True), help="Working directory (default: --dir > $TIMEPAD > $LOG_DIR > CWD)")
+@click.option("--dir", "dir_opt", type=click.Path(file_okay=False, dir_okay=True),
+              help="Working directory (default: --dir > -c > $TIMEPAD > $LOG_DIR > CWD)")
+@click.option("-c", "--cwd", is_flag=True,
+              help="Use current directory; ignore $TIMEPAD and $LOG_DIR")
 @click.pass_context
-def cli(ctx: click.Context, dir_opt: Optional[str]):
+def cli(ctx: click.Context, dir_opt: Optional[str], cwd: bool):
     """Timepad CLI. Without a subcommand, an interactive shell is started."""
     ctx.ensure_object(dict)
-    ctx.obj["base_dir"] = resolve_base_dir(dir_opt)
+    ctx.obj["base_dir"] = resolve_base_dir(dir_opt, ignore_env=cwd)
     if ctx.invoked_subcommand is None:
         start_shell(ctx.obj)
 
@@ -169,7 +177,7 @@ def start_shell(obj: dict):
     @click.argument("subject_parts", nargs=-1)
     @click.pass_context
     def new(ctx, subject_parts: tuple[str, ...]):
-        _cmd_new(ctx.obj, subject=" ".join(subject_parts).strip())
+        _cmd_new(obj, subject=" ".join(subject_parts).strip())
 
     @sh.command(help="Show entries as a table")
     @click.option("-a", "ascending", is_flag=True, default=True, help="Ascending (default)")
@@ -177,13 +185,13 @@ def start_shell(obj: dict):
     @click.pass_context
     def list(ctx, ascending: bool, descending: bool):
         asc = ascending if not descending else False
-        _cmd_list(ctx.obj, asc)
+        _cmd_list(obj, asc)
 
     @sh.command(help="Show file content (by part of filename)")
     @click.argument("query", nargs=1)
     @click.pass_context
     def cat(ctx, query):
-        _cmd_cat(ctx.obj, query)
+        _cmd_cat(obj, query)
 
     @sh.command(help="Dump all entries in sequence")
     @click.option("-a", "ascending", is_flag=True, default=True, help="Ascending (default)")
@@ -191,37 +199,42 @@ def start_shell(obj: dict):
     @click.pass_context
     def dump(ctx, ascending: bool, descending: bool):
         asc = ascending if not descending else False
-        _cmd_dump(ctx.obj, asc)
+        _cmd_dump(obj, asc)
 
     @sh.command(help="Edit a file in the editor (by part of filename)")
     @click.argument("query", nargs=1)
     @click.pass_context
     def edit(ctx, query):
-        _cmd_edit(ctx.obj, query)
+        _cmd_edit(obj, query)
 
     @sh.command(help="Delete a file (by part of filename)")
     @click.argument("query", nargs=1)
     @click.pass_context
     def rm(ctx, query):
-        _cmd_rm(ctx, query)
+        _cmd_rm(obj, query)
 
     @sh.command(help="Rename an entry (by part of filename)")
     @click.argument("query", nargs=1)
     @click.pass_context
     def mv(ctx, query):
-        _cmd_mv(ctx.obj, query)
+        _cmd_mv(obj, query)
 
     @sh.command(help="Copy an entry to a new filename (by part of filename)")
     @click.argument("query", nargs=1)
     @click.pass_context
     def cp(ctx, query):
-        _cmd_cp(ctx.obj, query)
+        _cmd_cp(obj, query)
 
     @sh.command(help="Create a .bak backup next to the file")
     @click.argument("query", nargs=1)
     @click.pass_context
     def bak(ctx, query):
-        _cmd_bak(ctx.obj, query)
+        _cmd_bak(obj, query)
+
+    @sh.command(help="List filenames")
+    @click.pass_context
+    def ls(ctx):
+        _cmd_ls(obj)
 
     sh()
 
@@ -294,6 +307,11 @@ def bak(ctx, query: str):
     _cmd_bak(ctx.obj, query)
 
 
+@cli.command(help="List filenames in the working directory (like 'ls')")
+@click.pass_context
+def ls(ctx):
+    _cmd_ls(ctx.obj)
+
 # ----------------- Implementations -----------------
 
 def _ensure_dir(path: str):
@@ -335,12 +353,14 @@ def _cmd_new(obj: dict, when: Optional[str] = None, subject: Optional[str] = Non
 def _cmd_list(obj: dict, ascending: bool):
     base_dir = obj["base_dir"]
     entries = sort_entries(scan_entries(base_dir), ascending=ascending)
+
     table = Table(title=f"Entries in {base_dir}", box=box.MINIMAL_DOUBLE_HEAD)
     table.add_column("Date/Time", style="green", no_wrap=True)
     table.add_column("Subject", style="magenta")
-    table.add_column("Filename", style="cyan")
+
     for e in entries:
-        table.add_row(e.dt.strftime(DISPLAY_DT_FORMAT), e.subject, e.filename)
+        table.add_row(e.dt.strftime(DISPLAY_DT_FORMAT), e.subject)
+
     if not entries:
         console.print("[yellow]No entries found.[/yellow]")
     else:
@@ -461,6 +481,12 @@ def _cmd_bak(obj: dict, query: str):
     except OSError as ex:
         console.print(f"[red]Error while creating backup:[/red] {ex}")
 
+def _cmd_ls(obj: dict):
+    """List filenames in the working directory (like 'ls')."""
+    base_dir = obj["base_dir"]
+    entries = sort_entries(scan_entries(base_dir), ascending=True)
+    for e in entries:
+        click.echo(e.filename)
 
 if __name__ == "__main__":
     try:
