@@ -14,13 +14,15 @@ Commands:
   edit <pattern>     – open a file in the editor by pattern
   rm   <pattern>     – delete a file by pattern (with confirmation)
   mv   <pattern>     – rename an entry after selecting it uniquely
+  rename <pattern>   – rename only the subject part of the filename
   cp   <pattern>     – copy an entry to a new filename
   bak  <pattern>     – create a .bak copy next to the file
   ls                 - list filenames
   config             - show parameters effecting program execution
 
 Directory resolution priority:
-  --dir option > $TIMEPAD > $LOG_DIR > current working directory
+  --dir option > -c/--cwd > $TIMEPAD > $LOG_DIR > CWD/.timepad (if exists) > CWD
+
 
 Dependencies: click, click-shell, rich
 """
@@ -105,6 +107,7 @@ def _base_dir_info(obj: dict) -> dict:
     flags = obj.get("flags", {})
     dir_opt = flags.get("dir_opt")
     use_cwd = bool(flags.get("cwd"))
+
     if dir_opt:
         source = "--dir"
         chosen = dir_opt
@@ -118,8 +121,14 @@ def _base_dir_info(obj: dict) -> dict:
         source = "LOG_DIR"
         chosen = os.environ.get("LOG_DIR")
     else:
-        source = "CWD"
-        chosen = os.getcwd()
+        cwd = os.getcwd()
+        dot = os.path.join(cwd, ".timepad")
+        if os.path.isdir(dot):
+            source = "CWD/.timepad"
+            chosen = dot
+        else:
+            source = "CWD"
+            chosen = cwd
 
     effective = os.path.abspath(os.path.expanduser(os.path.expandvars(chosen)))
     return {
@@ -132,17 +141,19 @@ def _base_dir_info(obj: dict) -> dict:
 
 
 def resolve_base_dir(dir_opt: Optional[str], ignore_env: bool = False) -> str:
-    # Precedence: --dir > -c > $TIMEPAD > $LOG_DIR > CWD
+    # Precedence: --dir > -c > $TIMEPAD > $LOG_DIR > CWD/.timepad (if exists) > CWD
     if dir_opt:
         chosen = dir_opt
     elif ignore_env:
+        # -c means: use exactly the current directory, do NOT prefer .timepad
         chosen = os.getcwd()
     else:
-        chosen = (
-            os.environ.get("TIMEPAD")
-            or os.environ.get("LOG_DIR")
-            or os.getcwd()
-        )
+        # No --dir and not forcing CWD: check envs, then prefer CWD/.timepad
+        chosen = os.environ.get("TIMEPAD") or os.environ.get("LOG_DIR")
+        if not chosen:
+            cwd = os.getcwd()
+            dot = os.path.join(cwd, ".timepad")
+            chosen = dot if os.path.isdir(dot) else cwd
     return os.path.abspath(os.path.expanduser(os.path.expandvars(chosen)))
 
 def _normalize_query_time_to_hyphens(q: str) -> str:
@@ -265,7 +276,7 @@ def resolve_by_query(base_dir: str, query: str) -> Optional[Entry]:
 
 @click.group(invoke_without_command=True)
 @click.option("--dir", "dir_opt", type=click.Path(file_okay=False, dir_okay=True),
-              help="Working directory (default: --dir > -c > $TIMEPAD > $LOG_DIR > CWD)")
+              help="Working directory (default: --dir > -c > $TIMEPAD > $LOG_DIR > CWD/.timepad if exists else CWD)")
 @click.option("-c", "--cwd", is_flag=True,
               help="Use current directory; ignore $TIMEPAD and $LOG_DIR")
 @click.pass_context
