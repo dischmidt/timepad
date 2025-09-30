@@ -21,7 +21,8 @@ Commands:
   config             - show parameters effecting program execution
 
 Directory resolution priority:
-  --dir option > -c/--cwd > $TIMEPAD > $LOG_DIR > CWD/.timepad (if exists) > CWD
+--dir option > -c/--cwd > $TIMEPAD > $LOG_DIR > CWD/.timepad (if exists) > CWD
+With -n/--new: create and use CWD/.timepad (errors if --dir or env vars are set unless -c is used).
 
 
 Dependencies: click, click-shell, rich
@@ -107,13 +108,18 @@ def _base_dir_info(obj: dict) -> dict:
     flags = obj.get("flags", {})
     dir_opt = flags.get("dir_opt")
     use_cwd = bool(flags.get("cwd"))
+    new_flag = bool(flags.get("new"))
 
     if dir_opt:
         source = "--dir"
         chosen = dir_opt
     elif use_cwd:
-        source = "CWD"
-        chosen = os.getcwd()
+        if new_flag:
+            source = "CWD/.timepad (new)"
+            chosen = os.path.join(os.getcwd(), ".timepad")
+        else:
+            source = "CWD"
+            chosen = os.getcwd()
     elif os.environ.get("TIMEPAD"):
         source = "TIMEPAD"
         chosen = os.environ.get("TIMEPAD")
@@ -123,7 +129,10 @@ def _base_dir_info(obj: dict) -> dict:
     else:
         cwd = os.getcwd()
         dot = os.path.join(cwd, ".timepad")
-        if os.path.isdir(dot):
+        if new_flag:
+            source = "CWD/.timepad (new)"
+            chosen = dot
+        elif os.path.isdir(dot):
             source = "CWD/.timepad"
             chosen = dot
         else:
@@ -138,22 +147,27 @@ def _base_dir_info(obj: dict) -> dict:
         "CWD": os.getcwd(),
     }
 
-
-
-def resolve_base_dir(dir_opt: Optional[str], ignore_env: bool = False) -> str:
-    # Precedence: --dir > -c > $TIMEPAD > $LOG_DIR > CWD/.timepad (if exists) > CWD
+def resolve_base_dir(dir_opt: Optional[str], ignore_env: bool = False, create_local: bool = False) -> str:
+    # --dir > -c > $TIMEPAD > $LOG_DIR > CWD/.timepad (if exists) > CWD
     if dir_opt:
         chosen = dir_opt
     elif ignore_env:
-        # -c means: use exactly the current directory, do NOT prefer .timepad
-        chosen = os.getcwd()
+        chosen = os.path.join(os.getcwd(), ".timepad") if create_local else os.getcwd()
+        if create_local:
+            os.makedirs(chosen, exist_ok=True)
     else:
-        # No --dir and not forcing CWD: check envs, then prefer CWD/.timepad
-        chosen = os.environ.get("TIMEPAD") or os.environ.get("LOG_DIR")
-        if not chosen:
+        env = os.environ.get("TIMEPAD") or os.environ.get("LOG_DIR")
+        if env:
+            chosen = env
+        else:
             cwd = os.getcwd()
             dot = os.path.join(cwd, ".timepad")
-            chosen = dot if os.path.isdir(dot) else cwd
+            if create_local:
+                os.makedirs(dot, exist_ok=True)
+                chosen = dot
+            else:
+                chosen = dot if os.path.isdir(dot) else cwd
+
     return os.path.abspath(os.path.expanduser(os.path.expandvars(chosen)))
 
 def _normalize_query_time_to_hyphens(q: str) -> str:
@@ -279,14 +293,23 @@ def resolve_by_query(base_dir: str, query: str) -> Optional[Entry]:
               help="Working directory (default: --dir > -c > $TIMEPAD > $LOG_DIR > CWD/.timepad if exists else CWD)")
 @click.option("-c", "--cwd", is_flag=True,
               help="Use current directory; ignore $TIMEPAD and $LOG_DIR")
+@click.option("-n", "--new", "create_local", is_flag=True,
+              help="Create .timepad in the current directory and use it (errors if --dir, $TIMEPAD or $LOG_DIR are set)")
 @click.pass_context
-def cli(ctx: click.Context, dir_opt: Optional[str], cwd: bool):
+def cli(ctx: click.Context, dir_opt: Optional[str], cwd: bool, create_local: bool):
     """Timepad CLI. Without a subcommand, an interactive shell is started."""
+    # Konfliktprüfung: -n ist unsinnig bei --dir oder gesetzten Env-Vars (sofern nicht -c aktiv ist)
+    if create_local and dir_opt:
+        raise click.UsageError("Flag -n/--new cannot be used together with --dir.")
+    if create_local and not cwd and (os.environ.get("TIMEPAD") or os.environ.get("LOG_DIR")):
+        raise click.UsageError("Flag -n/--new cannot be used while $TIMEPAD or $LOG_DIR are set. Use -c to ignore env vars.")
+
     ctx.ensure_object(dict)
-    ctx.obj["flags"] = {"dir_opt": dir_opt, "cwd": bool(cwd)}
-    ctx.obj["base_dir"] = resolve_base_dir(dir_opt, ignore_env=cwd)
+    ctx.obj["flags"] = {"dir_opt": dir_opt, "cwd": bool(cwd), "new": bool(create_local)}
+    ctx.obj["base_dir"] = resolve_base_dir(dir_opt, ignore_env=cwd, create_local=create_local)
     if ctx.invoked_subcommand is None:
         start_shell(ctx.obj)
+
 
 
 def start_shell(obj: dict):
@@ -486,8 +509,11 @@ def _cmd_config(obj: dict, as_json: bool = False):
         "TIMEPAD_raw": os.environ.get("TIMEPAD"),
         "LOG_DIR_raw": os.environ.get("LOG_DIR"),
         "CWD": base["CWD"],
-        "invoked_flags": {"--dir": flags.get("dir_opt"), "-c/--cwd": bool(flags.get("cwd"))},
-
+        "invoked_flags": {
+            "--dir": flags.get("dir_opt"),
+            "-c/--cwd": bool(flags.get("cwd")),
+            "-n/--new": bool(flags.get("new")),
+            },
         # Additional helpful fields:
         "effective_base_dir": base["effective_base_dir"],
         "base_dir_source": base["base_dir_source"],
@@ -519,6 +545,7 @@ def _cmd_config(obj: dict, as_json: bool = False):
     show("CWD", data["CWD"])
     table.add_row("invoked_flags.--dir", str(data["invoked_flags"]["--dir"]))
     table.add_row("invoked_flags.-c/--cwd", str(data["invoked_flags"]["-c/--cwd"]))
+    table.add_row("invoked_flags.-n/--new", str(data["invoked_flags"]["-n/--new"]))
 
     # Extra helpful fields
     table.add_row("effective_base_dir", data["effective_base_dir"])
