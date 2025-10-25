@@ -418,8 +418,9 @@ def list_cmd(ctx, ascending: bool, descending: bool):
 @cli.command(help="Show file content")
 @click.argument("query", nargs=-1)
 @click.pass_context
-def cat(ctx, query: str):
-    _cmd_cat(ctx.obj, query)
+def cat(ctx, query):
+    # click passes a tuple when nargs=-1; join into a single query string
+    _cmd_cat(ctx.obj, _join_query(query))
 
 
 @cli.command(help="Dump all entries")
@@ -435,36 +436,38 @@ def dump(ctx, ascending: bool, descending: bool, with_separator: bool):
 @cli.command(help="Edit a file in the editor")
 @click.argument("query", nargs=-1)
 @click.pass_context
-def edit(ctx, query: str):
-    _cmd_edit(ctx.obj, query)
+def edit(ctx, query):
+    _cmd_edit(ctx.obj, _join_query(query))
 
 
 @cli.command(help="Delete a file")
 @click.argument("query", nargs=-1)
 @click.pass_context
-def rm(ctx, query: str):
-    _cmd_rm(ctx, query)
+def rm(ctx, query):
+    # click passes a tuple when nargs=-1; join into a single query string
+    _cmd_rm(ctx.obj, _join_query(query))
 
 
 @cli.command(help="Rename an entry")
 @click.argument("query", nargs=-1)
 @click.pass_context
-def mv(ctx, query: str):
-    _cmd_mv(ctx.obj, query)
+def mv(ctx, query):
+    _cmd_mv(ctx.obj, _join_query(query))
 
 
 @cli.command(help="Copy an entry to a new filename")
 @click.argument("query", nargs=1)
 @click.pass_context
 def cp(ctx, query: str):
+    # single-arg copy; pass through directly
     _cmd_cp(ctx.obj, query)
 
 
 @cli.command(help="Create a .bak backup of an entry")
 @click.argument("query", nargs=-1)
 @click.pass_context
-def bak(ctx, query: str):
-    _cmd_bak(ctx.obj, query)
+def bak(ctx, query):
+    _cmd_bak(ctx.obj, _join_query(query))
 
 
 @cli.command(help="List filenames in the working directory (like 'ls')")
