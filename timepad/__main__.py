@@ -276,8 +276,22 @@ def pick_from_matches(matches: List[Entry]) -> Optional[Entry]:
 
 
 def resolve_by_query(base_dir: str, query: str) -> Optional[Entry]:
-    # Eingabe so normalisieren, dass Zeitangaben mit ':' zu '-' werden
-    # (nur in echter Zeit-Position, siehe Helper)
+    query_lower = query.lower().strip()
+    
+    # Handle special keywords for first/last entry
+    if query_lower in ('first', 'last'):
+        entries = scan_entries(base_dir)
+        if not entries:
+            console.print("[yellow]No entries found.[/yellow]")
+            return None
+            
+        sorted_entries = sort_entries(entries, ascending=True)
+        if query_lower == 'first':
+            return sorted_entries[0]  # oldest
+        else:  # last
+            return sorted_entries[-1]  # newest
+            
+    # Normal query processing
     normalized = _normalize_query_time_to_hyphens(query)
     query_lower = normalized.lower()
 
@@ -329,13 +343,14 @@ def start_shell(obj: dict):
     def log(ctx, subject_parts: tuple[str, ...]):
         _cmd_log(obj, subject=" ".join(subject_parts).strip())
 
-    @sh.command(help="Show entries as a table")
+    @sh.command(help="Show entries as a table. Use 'first' or 'last' to show oldest/newest entry.")
     @click.option("-a", "ascending", is_flag=True, default=True, help="Ascending (default)")
     @click.option("-d", "descending", is_flag=True, help="Descending")
+    @click.argument("query", required=False)
     @click.pass_context
-    def list(ctx, ascending: bool, descending: bool):
+    def list(ctx, ascending: bool, descending: bool, query: str | None):
         asc = ascending if not descending else False
-        _cmd_list(obj, asc)
+        _cmd_list(obj, asc, query)
 
     @sh.command(help="Show file content (by part of filename)")
     @click.argument("query_parts", nargs=-1)
@@ -420,13 +435,14 @@ def log(ctx, subject_parts: tuple[str, ...], when: Optional[str]):
     _cmd_log(ctx.obj, when=when, subject=" ".join(subject_parts).strip())
 
 
-@cli.command(name="list", help="Show entries as a table")
+@cli.command(name="list", help="Show entries as a table. Use 'first' or 'last' to show oldest/newest entry.")
 @click.option("-a", "ascending", is_flag=True, default=True, help="Ascending (default)")
 @click.option("-d", "descending", is_flag=True, help="Descending")
+@click.argument("query", required=False)
 @click.pass_context
-def list_cmd(ctx, ascending: bool, descending: bool):
+def list_cmd(ctx, ascending: bool, descending: bool, query: str | None):
     asc = ascending if not descending else False
-    _cmd_list(ctx.obj, asc)
+    _cmd_list(ctx.obj, asc, query)
 
 
 @cli.command(help="Show file content")
@@ -615,8 +631,21 @@ def _cmd_new(obj: dict, when: Optional[str] = None, subject: Optional[str] = Non
             sys.exit(rc)
 
 
-def _cmd_list(obj: dict, ascending: bool):
+def _cmd_list(obj: dict, ascending: bool, query: str | None = None):
     base_dir = obj["base_dir"]
+    
+    # Handle special cases for first/last
+    if query and query.lower().strip() in ('first', 'last'):
+        e = resolve_by_query(base_dir, query)
+        if e:
+            table = Table(title=f"{query.title()} entry", box=box.MINIMAL_DOUBLE_HEAD)
+            table.add_column("Date/Time", style="green", no_wrap=True)
+            table.add_column("Subject", style="magenta")
+            table.add_row(e.dt.strftime(DISPLAY_DT_FORMAT), e.subject)
+            console.print(table)
+        return
+    
+    # Normal listing behavior
     entries = sort_entries(scan_entries(base_dir), ascending=ascending)
 
     table = Table(title=f"Entries in {base_dir}", box=box.MINIMAL_DOUBLE_HEAD)
