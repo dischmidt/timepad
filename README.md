@@ -1,14 +1,18 @@
 # timepad — CLI Notebook & Log Manager
 
-**timepad** is a small, fast command-line tool for timestamped notes/logs (“protocols”).
-It creates files named by date/time (and optional subject), opens them in your editor,
-and provides convenient commands to list, view, dump, edit, rename, copy, and back up entries.
+**timepad** is a lightweight command-line tool for managing timestamped notes and logs.
+It creates files with standardized names (date/time + optional subject), opens them in your
+preferred editor, and provides commands to list, view, edit, rename, and manage your entries.
 
 ---
 
 ## Purpose
 
-Timepad helps you record what happened, when it happened, and why. Each note begins with the current date and time, plus a short subject, so your work forms a clear timeline and context. You can start a note for a task, return to it later, and quickly find related notes for the same project or day. Reading, renaming, copying, or safely backing up entries is simple. Use it to document steps, capture ideas, track progress, and assemble a dependable story of your decisions and results.
+Timepad helps you maintain a clear timeline of your work and thoughts. Each entry is
+automatically timestamped and can include a descriptive subject. The consistent format
+makes it easy to track what happened when, find related notes, and build a searchable
+history of your activities. Perfect for documenting work sessions, tracking decisions,
+recording meeting notes, or keeping a work log.
 
 ---
 
@@ -65,108 +69,118 @@ chmod +x timepad.py
 
 ## Commands
 
-> In all commands that take `<pattern>`, you can pass a **full** filename or **any substring** of it
-> (e.g., the date or a unique keyword). If multiple files match, timepad shows a numbered list to choose from.
+> For commands that take `<pattern>`, you can use any part of a filename (date, time, or subject).
+> If multiple files match, timepad shows a numbered selection menu.
 
-### Create
+### Create & Edit
 
-- `new [subject...]`  
-  Create a new entry, open in `$EDITOR`. Everything after `new` becomes the **subject** in the filename.
+- `new [subject...]` [-at DATETIME]  
+  Create a new entry and open in `$EDITOR`. Everything after `new` becomes the subject.
+  Use `--at` to set a specific timestamp (format: 'YYYY-MM-DD HH:MM:SS').
 
   Examples:
   ```bash
   timepad new                      # => 2025-09-24 11-19-47.txt
   timepad new dataset fixes        # => 2025-09-24 11-19-47 dataset fixes.txt
+  timepad new --at "2025-10-24 15:30:00" test  # Custom timestamp
   ```
 
-### List
+### List & View
 
 - `list [-a | -d]`  
-  Show entries in a table. **Two columns only**:
-  - **Date/Time** (from filename)
-  - **Subject** (filename without date/time and without `.txt`)
+  Show entries in a two-column table (timestamp and subject).
+  - `-a` → ascending by date (oldest first) **[default]**
+  - `-d` → descending by date (newest first)
 
-  Flags:
-  - `-a` → ascending (oldest first) **[default]**
-  - `-d` → descending (newest first)
+- `ls`  
+  List filenames only, sorted by date (ascending).
 
-### View / Dump
+### View Contents
 
 - `cat <pattern>`  
-  Print the contents of a single matching file to stdout.
+  Show contents of a matching file.
 
 - `dump [-a | -d] [-s]`  
-  Print **all** files to stdout in sequence.  
-  Flags:
+  Print all files in sequence.
   - `-a` → ascending (default)
   - `-d` → descending
-  - `-s` → **add a separator line** between files (80 hyphens)
+  - `-s` → add separator lines between files
 
   Example:
   ```bash
-  timepad dump -d -s
+  timepad dump -d -s  # Newest first with separators
   ```
 
-### Edit / Remove
+### Edit & Remove
 
 - `edit <pattern>`  
-  Open a matching file in `$EDITOR`.
+  Open matching file in `$EDITOR`.
 
 - `rm <pattern>`  
-  Delete a matching file (**with confirmation**).
+  Delete matching file (asks for confirmation).
 
-### Rename / Copy / Backup
+### File Management
 
 - `mv <pattern>`  
-  Rename a file (you’ll be prompted for the new filename).
+  Rename matching file (prompts for new name).
+
+- `rename <pattern>`  
+  Change only the subject part (keeps timestamp).
 
 - `cp <pattern>`  
-  Copy a file (you’ll be prompted for the new filename).
+  Copy to new filename (prompts for name).
 
 - `bak <pattern>`  
-  Create a `.bak` copy next to the file (e.g., `2025-09-24 11-19-47 note.bak`).
+  Create `.bak` copy (e.g. `2025-09-24 11-19-47 note.bak`).
 
-### List Filenames Only
+### Configuration
 
-- `ls`  
-  Print filenames only (like `ls`), sorted ascending by date/time.
-
----
-
-## Directory Selection
-
-You can control where files live:
-
-- Force current directory and ignore env vars:
-  ```bash
-  timepad -c list
-  ```
-- Specify a directory explicitly:
-  ```bash
-  timepad --dir ~/protocol new "today"
-  ```
-- Or set an environment variable:
-  ```bash
-  export TIMEPAD=~/protocol
-  # or
-  export LOG_DIR=~/protocol
-  ```
-
-> `~` and variables inside paths are expanded, e.g. `~/protocol` → `/home/you/protocol`.
+- `config [--json]`  
+  Show current settings (use --json for machine-readable output)
 
 ---
 
-## Shell Mode
+## Storage Location
 
-Run `timepad` with no subcommand:
+Timepad uses the following priority order to determine where to store files:
+
+1. `--dir ~/path`  (explicit directory path)
+2. `-c/--cwd`     (force current directory, ignore env)
+3. `$TIMEPAD`     (environment variable)
+4. `$LOG_DIR`     (fallback environment variable) 
+5. `CWD/.timepad` (if it exists)
+6. `CWD`         (current directory)
+
+Examples:
+```bash
+# Use specific directory
+timepad --dir ~/notes new "meeting"
+
+# Force current directory (ignore env vars)
+timepad -c list
+
+# Use environment variable
+export TIMEPAD=~/protocol
+timepad new "test"
+```
+
+> Path expansion: `~` and environment variables in paths are expanded
+> (e.g., `~/protocol` becomes `/home/user/protocol`)
+
+---
+
+## Interactive Shell
+
+Run `timepad` without arguments to enter shell mode:
 
 ```bash
 timepad
+Welcome to the Timepad shell. Type 'help' or 'exit'.
 timepad> new first note
-timepad> list -d
-timepad> dump -s
-timepad> edit 2025-09-24
-timepad> rm note
+timepad> list -d        # Show newest first
+timepad> cat 2025-09    # View entry matching date
+timepad> edit note      # Edit entry matching "note"
+timepad> dump -s        # Show all with separators
 timepad> exit
 ```
 

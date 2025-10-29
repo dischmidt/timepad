@@ -470,9 +470,9 @@ def start_shell(obj: dict):
     sh()
 
 
-@cli.command(help="Create a new entry and open it in the editor")
+@cli.command(help="Create a new entry and open it in $EDITOR (or nano). Optional subject becomes part of filename.")
 @click.argument("subject_parts", nargs=-1)
-@click.option("--at", "when", type=str, default=None, help="Manually set timestamp (format: 'YYYY-MM-DD HH:MM:SS') for the file header only")
+@click.option("--at", "when", type=str, default=None, help="Set custom timestamp (format: 'YYYY-MM-DD HH:MM:SS') for both filename and header")
 @click.pass_context
 def new(ctx, subject_parts: tuple[str, ...], when: Optional[str]):
     _cmd_new(ctx.obj, when=when, subject=" ".join(subject_parts).strip())
@@ -495,7 +495,7 @@ def list_cmd(ctx, ascending: bool, descending: bool, query: str | None):
     _cmd_list(ctx.obj, asc, query)
 
 
-@cli.command(help="Show file content")
+@cli.command(help="Show content of a file matching the given pattern")
 @click.argument("query", nargs=-1)
 @click.pass_context
 def cat(ctx, query):
@@ -503,7 +503,7 @@ def cat(ctx, query):
     _cmd_cat(ctx.obj, _join_query(query))
 
 
-@cli.command(help="Dump all entries")
+@cli.command(help="Print all entries in sequence. Use -s for separators between files.")
 @click.option("-a", "ascending", is_flag=True, default=True, help="Ascending (default)")
 @click.option("-d", "descending", is_flag=True, help="Descending")
 @click.option("-s", "with_separator", is_flag=True, help="Add a separator line between files")
@@ -513,14 +513,14 @@ def dump(ctx, ascending: bool, descending: bool, with_separator: bool):
     _cmd_dump(ctx.obj, asc, with_separator)
 
 
-@cli.command(help="Edit a file in the editor")
+@cli.command(help="Open a matching file in $EDITOR (or nano)")
 @click.argument("query", nargs=-1)
 @click.pass_context
 def edit(ctx, query):
     _cmd_edit(ctx.obj, _join_query(query))
 
 
-@cli.command(help="Delete a file")
+@cli.command(help="Delete a matching file (prompts for confirmation)")
 @click.argument("query", nargs=-1)
 @click.pass_context
 def rm(ctx, query):
@@ -528,7 +528,7 @@ def rm(ctx, query):
     _cmd_rm(ctx.obj, _join_query(query))
 
 
-@cli.command(help="Rename an entry")
+@cli.command(help="Rename a matching file (prompts for new name)")
 @click.argument("query", nargs=-1)
 @click.pass_context
 def mv(ctx, query):
