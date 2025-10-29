@@ -323,6 +323,12 @@ def start_shell(obj: dict):
     def new(ctx, subject_parts: tuple[str, ...]):
         _cmd_new(obj, subject=" ".join(subject_parts).strip())
 
+    @sh.command(help="Create a new entry without opening it in the editor")
+    @click.argument("subject_parts", nargs=-1)
+    @click.pass_context
+    def log(ctx, subject_parts: tuple[str, ...]):
+        _cmd_log(obj, subject=" ".join(subject_parts).strip())
+
     @sh.command(help="Show entries as a table")
     @click.option("-a", "ascending", is_flag=True, default=True, help="Ascending (default)")
     @click.option("-d", "descending", is_flag=True, help="Descending")
@@ -388,10 +394,11 @@ def start_shell(obj: dict):
         _cmd_config(obj, as_json)   # or _cmd_config(ctx.obj, as_json) if you didn't apply the earlier fix
 
     @sh.command(help="Rename only the subject (keep date/time and .txt)")
-    @click.argument("query_parts", nargs=-1)
+    @click.argument("query_parts", nargs=-1, required=False)
     @click.pass_context
     def rename(ctx, query_parts):
-        _cmd_rename(obj, _join_query(query_parts))   # or: _cmd_rename(obj, query) if using captured obj
+        query_str = _join_query(query_parts) if query_parts else None
+        _cmd_rename(obj, query_str)
 
 
 
@@ -404,6 +411,13 @@ def start_shell(obj: dict):
 @click.pass_context
 def new(ctx, subject_parts: tuple[str, ...], when: Optional[str]):
     _cmd_new(ctx.obj, when=when, subject=" ".join(subject_parts).strip())
+
+@cli.command(help="Create a new entry without opening it in the editor")
+@click.argument("subject_parts", nargs=-1)
+@click.option("--at", "when", type=str, default=None, help="Manually set timestamp (format: 'YYYY-MM-DD HH:MM:SS') for the file header only")
+@click.pass_context
+def log(ctx, subject_parts: tuple[str, ...], when: Optional[str]):
+    _cmd_log(ctx.obj, when=when, subject=" ".join(subject_parts).strip())
 
 
 @cli.command(name="list", help="Show entries as a table")
@@ -482,10 +496,11 @@ def config(ctx, as_json: bool):
     _cmd_config(ctx.obj, as_json)
 
 @cli.command(help="Rename only the subject (keep date/time and .txt)")
-@click.argument("query", nargs=1)
+@click.argument("query", nargs=-1, required=False)
 @click.pass_context
-def rename(ctx, query: str):
-    _cmd_rename(ctx.obj, query)
+def rename(ctx, query):
+    query_str = _join_query(query) if query else None
+    _cmd_rename(ctx.obj, query_str)
 
 
 
@@ -562,7 +577,8 @@ def _cmd_config(obj: dict, as_json: bool = False):
     console.print(table)
 
 
-def _cmd_new(obj: dict, when: Optional[str] = None, subject: Optional[str] = None):
+def _create_entry(obj: dict, when: Optional[str] = None, subject: Optional[str] = None) -> tuple[str, datetime]:
+    """Create a new entry file and return its path and timestamp."""
     base_dir = obj["base_dir"]
     _ensure_dir(base_dir)
     if when:
@@ -570,21 +586,33 @@ def _cmd_new(obj: dict, when: Optional[str] = None, subject: Optional[str] = Non
             ts = datetime.strptime(when, DISPLAY_DT_FORMAT)
         except ValueError:
             console.print(f"[red]Invalid datetime format. Expected: {DISPLAY_DT_FORMAT}[/red]")
-            return
+            return None, None
     else:
         ts = datetime.now()
     filename = _make_filename(ts, (subject or "").strip() or None)
     path = os.path.join(base_dir, filename)
     username = os.environ.get("USER") or os.environ.get("USERNAME") or "unknown"
     if os.path.exists(path):
-        console.print(f"[yellow]Note: File already exists and will be opened.[/yellow]")
+        console.print(f"[yellow]Note: File already exists.[/yellow]")
     else:
         with open(path, "w", encoding="utf-8") as f:
             f.write(f"# {ts.strftime(DISPLAY_DT_FORMAT)} {username}\n\n")
-    console.print(Panel.fit(f"Editing: [bold]{os.path.basename(path)}[/bold]", style="cyan"))
-    rc = open_in_editor(path)
-    if rc != 0:
-        sys.exit(rc)
+    return path, ts
+
+def _cmd_log(obj: dict, when: Optional[str] = None, subject: Optional[str] = None):
+    """Create a new entry file without opening it."""
+    path, ts = _create_entry(obj, when, subject)
+    if path:
+        console.print(Panel.fit(f"Created: [bold]{os.path.basename(path)}[/bold]", style="cyan"))
+
+def _cmd_new(obj: dict, when: Optional[str] = None, subject: Optional[str] = None):
+    """Create a new entry file and open it in the editor."""
+    path, ts = _create_entry(obj, when, subject)
+    if path:
+        console.print(Panel.fit(f"Editing: [bold]{os.path.basename(path)}[/bold]", style="cyan"))
+        rc = open_in_editor(path)
+        if rc != 0:
+            sys.exit(rc)
 
 
 def _cmd_list(obj: dict, ascending: bool):
@@ -737,13 +765,21 @@ def _cmd_ls(obj: dict):
     for e in entries:
         click.echo(e.filename)
 
-def _cmd_rename(obj: dict, query: str):
+def _cmd_rename(obj: dict, query: str | None):
     """
     Rename only the subject part of the filename.
     Keeps date/time prefix and .txt extension unchanged.
+    If no query is provided, shows selection interface.
     """
     base_dir = obj["base_dir"]
-    e = resolve_by_query(base_dir, query)
+    
+    # If query is None or empty string after stripping, match all files
+    if query is None or not query.strip():
+        # Use empty string to match all files and show selection interface
+        e = resolve_by_query(base_dir, "")
+    else:
+        e = resolve_by_query(base_dir, query)
+        
     if not e:
         return
 
