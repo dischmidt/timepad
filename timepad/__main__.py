@@ -147,14 +147,53 @@ def _base_dir_info(obj: dict) -> dict:
         "CWD": os.getcwd(),
     }
 
+def _find_timepad_files(directory: str) -> List[str]:
+    """Find files matching timepad format in the given directory."""
+    matches = []
+    for file in os.listdir(directory):
+        path = os.path.join(directory, file)
+        if os.path.isfile(path) and parse_entry(path):
+            matches.append(path)
+    return matches
+
+def _init_timepad_dir(check_env: bool = True, migrate: bool = False) -> tuple[str, bool, List[str]]:
+    """Initialize .timepad directory in current working directory.
+    Returns (path, was_created, migrated_files) tuple.
+    If check_env is True, fails if $TIMEPAD or $LOG_DIR are set."""
+    if check_env:
+        env = os.environ.get("TIMEPAD") or os.environ.get("LOG_DIR")
+        if env:
+            raise click.UsageError(
+                "Cannot initialize .timepad directory while $TIMEPAD or $LOG_DIR are set. "
+                "Unset these variables or use -c to ignore them."
+            )
+    
+    cwd = os.getcwd()
+    dot = os.path.join(cwd, ".timepad")
+    exists = os.path.isdir(dot)
+    if not exists:
+        os.makedirs(dot, exist_ok=True)
+    
+    migrated = []
+    if migrate:
+        # Find and move matching files from current directory
+        for file_path in _find_timepad_files(cwd):
+            if os.path.dirname(file_path) != dot:  # Don't move files already in .timepad
+                new_path = os.path.join(dot, os.path.basename(file_path))
+                shutil.move(file_path, new_path)
+                migrated.append(file_path)
+    
+    return dot, not exists, migrated
+
 def resolve_base_dir(dir_opt: Optional[str], ignore_env: bool = False, create_local: bool = False) -> str:
     # --dir > -c > $TIMEPAD > $LOG_DIR > CWD/.timepad (if exists) > CWD
     if dir_opt:
         chosen = dir_opt
     elif ignore_env:
-        chosen = os.path.join(os.getcwd(), ".timepad") if create_local else os.getcwd()
         if create_local:
-            os.makedirs(chosen, exist_ok=True)
+            chosen, _ = _init_timepad_dir(check_env=False)
+        else:
+            chosen = os.getcwd()
     else:
         env = os.environ.get("TIMEPAD") or os.environ.get("LOG_DIR")
         if env:
@@ -163,8 +202,7 @@ def resolve_base_dir(dir_opt: Optional[str], ignore_env: bool = False, create_lo
             cwd = os.getcwd()
             dot = os.path.join(cwd, ".timepad")
             if create_local:
-                os.makedirs(dot, exist_ok=True)
-                chosen = dot
+                chosen, _ = _init_timepad_dir(check_env=False)
             else:
                 chosen = dot if os.path.isdir(dot) else cwd
 
@@ -406,7 +444,19 @@ def start_shell(obj: dict):
     @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
     @click.pass_context
     def config(ctx, as_json: bool):
-        _cmd_config(obj, as_json)   # or _cmd_config(ctx.obj, as_json) if you didn't apply the earlier fix
+        _cmd_config(obj, as_json)
+
+    @sh.command(help="Initialize .timepad directory in current working directory")
+    @click.option("-c", "--cwd", is_flag=True, help="Ignore $TIMEPAD and $LOG_DIR environment variables")
+    @click.option("--migrate", is_flag=True, help="Move existing timepad files from current directory to .timepad")
+    @click.pass_context
+    def init(ctx, cwd: bool, migrate: bool):
+        _cmd_init(ignore_env=cwd, migrate=migrate)
+
+    @sh.command(help="Move existing timepad files from current directory to timepad directory")
+    @click.pass_context
+    def migrate(ctx):
+        _cmd_migrate(obj)
 
     @sh.command(help="Rename only the subject (keep date/time and .txt)")
     @click.argument("query_parts", nargs=-1, required=False)
@@ -510,6 +560,18 @@ def ls(ctx):
 @click.pass_context
 def config(ctx, as_json: bool):
     _cmd_config(ctx.obj, as_json)
+
+@cli.command(help="Initialize .timepad directory in current working directory")
+@click.option("-c", "--cwd", is_flag=True, help="Ignore $TIMEPAD and $LOG_DIR environment variables")
+@click.option("--migrate", is_flag=True, help="Move existing timepad files from current directory to .timepad")
+@click.pass_context
+def init(ctx, cwd: bool, migrate: bool):
+    _cmd_init(ignore_env=cwd, migrate=migrate)
+
+@cli.command(help="Move existing timepad files from current directory to timepad directory")
+@click.pass_context
+def migrate(ctx):
+    _cmd_migrate(ctx.obj)
 
 @cli.command(help="Rename only the subject (keep date/time and .txt)")
 @click.argument("query", nargs=-1, required=False)
@@ -793,6 +855,54 @@ def _cmd_ls(obj: dict):
     entries = sort_entries(scan_entries(base_dir), ascending=True)
     for e in entries:
         click.echo(e.filename)
+
+def _cmd_init(ignore_env: bool = False, migrate: bool = False):
+    """Initialize .timepad directory in current working directory."""
+    try:
+        path, was_created, migrated = _init_timepad_dir(check_env=not ignore_env, migrate=migrate)
+        
+        # Show initialization status
+        if was_created:
+            console.print(f"[green]Initialized:[/green] Created .timepad directory in {os.getcwd()}")
+        else:
+            console.print(f"[yellow]Note:[/yellow] .timepad directory already exists in {os.getcwd()}")
+        
+        # Show migration results if any files were moved
+        if migrated:
+            console.print("\n[green]Migrated files:[/green]")
+            for file in migrated:
+                console.print(f"  • {os.path.basename(file)}")
+            console.print(f"\nMoved {len(migrated)} file(s) to {path}")
+            
+    except click.UsageError as e:
+        console.print(f"[red]Error:[/red] {str(e)}")
+        sys.exit(1)
+
+def _cmd_migrate(obj: dict):
+    """Migrate timepad files from current directory to timepad directory."""
+    base_dir = obj["base_dir"]
+    if not os.path.isdir(base_dir):
+        console.print(f"[red]Error:[/red] Timepad directory does not exist. Run 'init' first.")
+        sys.exit(1)
+    
+    cwd = os.getcwd()
+    migrated = []
+    
+    # Find and move matching files
+    for file_path in _find_timepad_files(cwd):
+        if os.path.dirname(file_path) != base_dir:  # Don't move files already in timepad dir
+            new_path = os.path.join(base_dir, os.path.basename(file_path))
+            shutil.move(file_path, new_path)
+            migrated.append(file_path)
+    
+    # Show results
+    if migrated:
+        console.print("[green]Migrated files:[/green]")
+        for file in migrated:
+            console.print(f"  • {os.path.basename(file)}")
+        console.print(f"\nMoved {len(migrated)} file(s) to {base_dir}")
+    else:
+        console.print("[yellow]No files found to migrate.[/yellow]")
 
 def _cmd_rename(obj: dict, query: str | None):
     """
