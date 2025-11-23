@@ -74,15 +74,21 @@ chmod +x timepad.py
 
 ### Create & Edit
 
-- `new [subject...]` [-at DATETIME]  
+- `new [subject...]` [-at DATETIME]
   Create a new entry and open in `$EDITOR`. Everything after `new` becomes the subject.
   Use `--at` to set a specific timestamp (format: 'YYYY-MM-DD HH:MM:SS').
+
+- `log [subject...]` [--at DATETIME]
+  Create a new entry **without** opening it in the editor—ideal for automation or quick capture.
+  `--at` only affects the header line; the filename timestamp stays at the current time.
 
   Examples:
   ```bash
   timepad new                      # => 2025-09-24 11-19-47.txt
   timepad new dataset fixes        # => 2025-09-24 11-19-47 dataset fixes.txt
-  timepad new --at "2025-10-24 15:30:00" test  # Custom timestamp
+  timepad new --at "2025-10-24 15:30:00" test      # Custom timestamp for filename + header
+  timepad log latency spike                             # Silent entry (no editor launch)
+  timepad log --at "2025-10-01 09:00:00" retro prep     # Header uses provided timestamp
   ```
 
 ### List & View
@@ -133,9 +139,32 @@ chmod +x timepad.py
 - `bak <pattern>`  
   Create `.bak` copy (e.g. `2025-09-24 11-19-47 note.bak`).
 
+### Initialize & Migrate Storage
+
+- `init [-c | --cwd] [--migrate]`
+  Create or reuse a `.timepad` directory in your current working directory.
+  - `-c/--cwd` ignores `$TIMEPAD`/`$LOG_DIR` so you can initialize relative to where you run the command.
+  - `--migrate` moves existing timepad-style files from the current directory into the new `.timepad`.
+
+  Examples:
+  ```bash
+  timepad init                 # Create .timepad next to your shell location
+  timepad init --migrate       # Also move matching files into the directory
+  timepad init -c --migrate    # Force using CWD even if env vars are set
+  ```
+
+- `migrate`
+  Move matching timepad files from the current directory into the active timepad directory (`--dir`, `$TIMEPAD`, etc.).
+  Useful after you change the storage location.
+
+  Example:
+  ```bash
+  timepad migrate
+  ```
+
 ### Configuration
 
-- `config [--json]`  
+- `config [--json]`
   Show current settings (use --json for machine-readable output)
 
 ---
