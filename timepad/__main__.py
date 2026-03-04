@@ -400,10 +400,11 @@ def start_shell(obj: dict):
     @click.option("-a", "ascending", is_flag=True, default=True, help="Ascending (default)")
     @click.option("-d", "descending", is_flag=True, help="Descending")
     @click.option("-s", "with_separator", is_flag=True, help="Add a separator line between files")
+    @click.option("-H", "with_header", is_flag=True, help="Add date+filename header before each file")
     @click.pass_context
-    def dump(ctx, ascending: bool, descending: bool, with_separator: bool):
+    def dump(ctx, ascending: bool, descending: bool, with_separator: bool, with_header: bool):
         asc = ascending if not descending else False
-        _cmd_dump(obj, asc, with_separator)
+        _cmd_dump(obj, asc, with_separator, with_header)
 
     @sh.command(help="Edit a file in the editor (by part of filename)")
     @click.argument("query_parts", nargs=-1)
@@ -507,10 +508,11 @@ def cat(ctx, query):
 @click.option("-a", "ascending", is_flag=True, default=True, help="Ascending (default)")
 @click.option("-d", "descending", is_flag=True, help="Descending")
 @click.option("-s", "with_separator", is_flag=True, help="Add a separator line between files")
+@click.option("-H", "with_header", is_flag=True, help="Add date+filename header before each file")
 @click.pass_context
-def dump(ctx, ascending: bool, descending: bool, with_separator: bool):
+def dump(ctx, ascending: bool, descending: bool, with_separator: bool, with_header: bool):
     asc = ascending if not descending else False
-    _cmd_dump(ctx.obj, asc, with_separator)
+    _cmd_dump(ctx.obj, asc, with_separator, with_header)
 
 
 @cli.command(help="Open a matching file in $EDITOR (or nano)")
@@ -707,6 +709,32 @@ def _cmd_list(obj: dict, ascending: bool, query: str | None = None):
             console.print(table)
         return
     
+    # Handle partial date queries (e.g., "2025-12" or "2025-12-25")
+    if query:
+        normalized = _normalize_query_time_to_hyphens(query)
+        # Check if query looks like a date pattern (YYYY-MM, YYYY-MM-DD, etc.)
+        date_pattern = re.match(r'^(\d{4}(?:-\d{2}(?:-\d{2})?)?)', normalized.strip())
+        if date_pattern:
+            date_prefix = date_pattern.group(1)
+            entries = [
+                e for e in scan_entries(base_dir)
+                if e.filename.startswith(date_prefix)
+            ]
+            entries = sort_entries(entries, ascending=ascending)
+            
+            table = Table(title=f"Entries matching {query}", box=box.MINIMAL_DOUBLE_HEAD)
+            table.add_column("Date/Time", style="green", no_wrap=True)
+            table.add_column("Subject", style="magenta")
+
+            for e in entries:
+                table.add_row(e.dt.strftime(DISPLAY_DT_FORMAT), e.subject)
+
+            if not entries:
+                console.print(f"[yellow]No entries found for {query}.[/yellow]")
+            else:
+                console.print(table)
+            return
+    
     # Normal listing behavior
     entries = sort_entries(scan_entries(base_dir), ascending=ascending)
 
@@ -732,7 +760,7 @@ def _cmd_cat(obj: dict, query: str):
         sys.stdout.write(f.read())
 
 
-def _cmd_dump(obj: dict, ascending: bool, with_separator: bool = False):
+def _cmd_dump(obj: dict, ascending: bool, with_separator: bool = False, with_header: bool = False):
     base_dir = obj["base_dir"]
     entries = sort_entries(scan_entries(base_dir), ascending=ascending)
 
@@ -750,6 +778,19 @@ def _cmd_dump(obj: dict, ascending: bool, with_separator: bool = False):
                 # preserve previous behavior: ensure at most one newline between files
                 if not prev_ended_nl:
                     sys.stdout.write("\n")
+
+        if with_header:
+            dt_str = e.filename[:FILENAME_DT_LEN]
+            dt_from_name = None
+            for fmt in (FILENAME_DT_FORMAT, DISPLAY_DT_FORMAT):
+                try:
+                    dt_from_name = datetime.strptime(dt_str, fmt)
+                    break
+                except ValueError:
+                    continue
+            nice_dt = dt_from_name.strftime(DISPLAY_DT_FORMAT) if dt_from_name else dt_str
+            name_without_dt = e.filename[FILENAME_DT_LEN + 1 :]
+            sys.stdout.write(f"{nice_dt} {name_without_dt}\n")
 
         with open(e.path, "r", encoding="utf-8") as f:
             content = f.read()
